@@ -41,7 +41,7 @@ function validateEmail(email) {
 // ── Sign Up ──
 router.post('/register', authLimiter, async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, phone } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: 'All fields are required' });
@@ -67,6 +67,7 @@ router.post('/register', authLimiter, async (req, res) => {
     const user = await User.create({
       name: name.trim(),
       email: email.toLowerCase().trim(),
+      phone: phone || '',
       password: hashedPassword,
     });
 
@@ -103,9 +104,11 @@ router.post('/login', authLimiter, async (req, res) => {
         return res.status(400).json({ success: false, message: 'Invalid email' });
       }
     } else {
-      // Treat as phone — search by phone (if stored, otherwise return error)
-      const cleanPhone = email.replace(/\D/g, '');
-      return res.status(400).json({ success: false, message: 'Phone number does not exist' });
+      // Treat as phone — search by phone
+      user = await User.findOne({ phone: email.replace(/\D/g, '') });
+      if (!user) {
+        return res.status(400).json({ success: false, message: 'Phone number does not exist' });
+      }
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -156,10 +159,6 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
 
     // Generate a hashed password reset token (valid 15 min)
     const rawToken = await PasswordResetToken.generate(user._id);
-
-    // TODO: In production, send this token via email:
-    //   `https://yourapp.com/auth/reset-password?token=${rawToken}`
-    // For development, return it so the frontend can display the link
 
     res.json({
       success: true,
