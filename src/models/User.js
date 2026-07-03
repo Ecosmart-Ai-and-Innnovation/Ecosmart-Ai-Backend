@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       minlength: 6,
+    recyclerProfile: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     },
   },
   { timestamps: true }

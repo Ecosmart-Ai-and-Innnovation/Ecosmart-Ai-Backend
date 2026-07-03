@@ -24,6 +24,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/otp', require('./routes/otp'));
 app.use('/api/waste', require('./routes/waste'));
 app.use('/api/recyclers', require('./routes/recyclers'));
+app.use('/api/recycler-profile', require('./routes/recycler-profile'));
 
 // Dashboard summary
 app.get('/api/dashboard', require('./middleware/auth'), async (req, res) => {
