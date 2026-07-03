@@ -41,7 +41,7 @@ function validateEmail(email) {
 // ── Sign Up ──
 router.post('/register', authLimiter, async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, role } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: 'All fields are required' });
@@ -68,6 +68,7 @@ router.post('/register', authLimiter, async (req, res) => {
       name: name.trim(),
       email: email.toLowerCase().trim(),
       phone: phone || '',
+      role: role || 'individual',
       password: hashedPassword,
     });
 
@@ -77,7 +78,7 @@ router.post('/register', authLimiter, async (req, res) => {
       success: true,
       data: {
         token,
-        user: { id: user._id, name: user.name, email: user.email },
+        user: { id: user._id, name: user.name, email: user.email, role: user.role },
       },
     });
   } catch (error) {
@@ -122,7 +123,7 @@ router.post('/login', authLimiter, async (req, res) => {
       success: true,
       data: {
         token,
-        user: { id: user._id, name: user.name, email: user.email },
+        user: { id: user._id, name: user.name, email: user.email, role: user.role },
       },
     });
   } catch (error) {
