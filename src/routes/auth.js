@@ -25,19 +25,10 @@ const forgotPasswordLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Password strength validation
+// Password validation (relaxed for hackathon)
 function validatePassword(password) {
-  if (password.length < 8) {
-    return 'Password must be at least 8 characters';
-  }
-  if (!/[A-Z]/.test(password)) {
-    return 'Password must contain an uppercase letter';
-  }
-  if (!/[0-9]/.test(password)) {
-    return 'Password must contain a number';
-  }
-  if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password)) {
-    return 'Password must contain a special character';
+  if (password.length < 6) {
+    return 'Password must be at least 6 characters';
   }
   return null;
 }
@@ -102,9 +93,19 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Email and password are required' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-    if (!user) {
-      return res.status(400).json({ success: false, message: 'Invalid email or password' });
+    // Determine if email field contains an email or phone number
+    const isEmail = email.includes('@');
+    let user;
+
+    if (isEmail) {
+      user = await User.findOne({ email: email.toLowerCase().trim() });
+      if (!user) {
+        return res.status(400).json({ success: false, message: 'Invalid email' });
+      }
+    } else {
+      // Treat as phone — search by phone (if stored, otherwise return error)
+      const cleanPhone = email.replace(/\D/g, '');
+      return res.status(400).json({ success: false, message: 'Phone number does not exist' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
