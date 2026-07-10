@@ -4,11 +4,12 @@ const Otp = require('../models/Otp');
 const User = require('../models/User');
 const PasswordResetToken = require('../models/PasswordResetToken');
 const { sendEmail, sendSMS } = require('../services/brevo');
+const jwt = require('jsonwebtoken');
 
 // ── Send OTP ──
 router.post('/send', async (req, res) => {
   try {
-    const { method, identifier } = req.body; // method: 'email' | 'phone', identifier: the email or phone number
+    const { method, identifier, purpose = 'password-reset' } = req.body; // purpose: password-reset | email-verification
 
     if (!method || !identifier) {
       return res.status(400).json({ success: false, message: 'Method and identifier are required' });
@@ -18,16 +19,48 @@ router.post('/send', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Method must be "email" or "phone"' });
     }
 
+    if (!['email-verification', 'password-reset'].includes(purpose)) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP purpose' });
+    }
+
+    if (purpose === 'email-verification' && method !== 'email') {
+      return res.status(400).json({ success: false, message: 'Email verification requires email OTP' });
+    }
+
+    if (purpose === 'password-reset' && method !== 'email') {
+      return res.status(400).json({ success: false, message: 'Password reset is available by email only' });
+    }
+
+    const normalizedIdentifier = method === 'email'
+      ? identifier.toLowerCase().trim()
+      : identifier.trim();
+
+    const user = method === 'email'
+      ? await User.findOne({ email: normalizedIdentifier })
+      : await User.findOne({ phone: normalizedIdentifier.replace(/\D/g, '') });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'No account found with this email' });
+    }
+
+    if (purpose === 'email-verification' && user.emailVerified) {
+      return res.json({
+        success: true,
+        message: 'Email is already verified',
+        data: { masked: maskIdentifier(normalizedIdentifier, method), alreadyVerified: true },
+      });
+    }
+
     // Generate 6-digit OTP
     const otpCode = Otp.generate();
 
     // Store OTP with 5-minute expiry
     await Otp.create({
-      identifier: identifier.toLowerCase().trim(),
+      identifier: normalizedIdentifier,
       method,
       otp: otpCode,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      purpose: 'password-reset',
+      purpose,
     });
 
     // Send OTP via Brevo
@@ -38,16 +71,18 @@ router.post('/send', async (req, res) => {
         if (method === 'email') {
           await sendEmail({
             to: identifier,
-            subject: 'Your EcoSmart AI Password Reset OTP',
+            subject: purpose === 'email-verification'
+              ? 'Verify your EcoSmart AI email'
+              : 'Your EcoSmart AI Password Reset OTP',
             htmlContent: `
               <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
                 <div style="text-align: center; margin-bottom: 24px;">
                   <h1 style="color: #1b5030; font-size: 24px;">EcoSmart AI</h1>
                 </div>
                 <div style="background: #f6fcf4; border-radius: 16px; padding: 32px; text-align: center;">
-                  <h2 style="color: #1b5030; margin-bottom: 8px;">Password Reset</h2>
+                  <h2 style="color: #1b5030; margin-bottom: 8px;">${purpose === 'email-verification' ? 'Verify Your Email' : 'Password Reset'}</h2>
                   <p style="color: #6b7280; font-size: 14px; margin-bottom: 24px;">
-                    Use the OTP below to reset your password. It expires in 5 minutes.
+                    Use the OTP below to continue. It expires in 5 minutes.
                   </p>
                   <div style="background: #ffffff; border-radius: 12px; padding: 16px 32px; display: inline-block;">
                     <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1b5030;">${otpCode}</span>
@@ -62,7 +97,7 @@ router.post('/send', async (req, res) => {
         } else {
           await sendSMS({
             to: identifier,
-            content: `Your EcoSmart AI password reset OTP is: ${otpCode}. It expires in 5 minutes.`,
+          content: `Your EcoSmart AI OTP is: ${otpCode}. It expires in 5 minutes.`,
           });
         }
       } catch (brevoError) {
@@ -72,7 +107,7 @@ router.post('/send', async (req, res) => {
     }
 
     // Always log to console for development
-    console.log(`\n🔐 OTP for ${method} (${identifier}): ${otpCode}\n`);
+    console.log(`\n🔐 ${purpose} OTP for ${method} (${identifier}): ${otpCode}\n`);
 
     // Mask identifier for response
     const masked = maskIdentifier(identifier, method);
@@ -95,17 +130,26 @@ router.post('/send', async (req, res) => {
 // ── Verify OTP ──
 router.post('/verify', async (req, res) => {
   try {
-    const { method, identifier, otp } = req.body;
+    const { method, identifier, otp, purpose = 'password-reset' } = req.body;
 
     if (!method || !identifier || !otp) {
       return res.status(400).json({ success: false, message: 'Method, identifier, and OTP are required' });
     }
 
+    if (!['email-verification', 'password-reset'].includes(purpose)) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP purpose' });
+    }
+
+    const normalizedIdentifier = method === 'email'
+      ? identifier.toLowerCase().trim()
+      : identifier.trim();
+
     // Find matching unverified OTP (without expiry check first)
     const otpDoc = await Otp.findOne({
-      identifier: identifier.toLowerCase().trim(),
+      identifier: normalizedIdentifier,
       method,
       otp,
+      purpose,
       verified: false,
     }).sort({ createdAt: -1 });
 
@@ -123,13 +167,42 @@ router.post('/verify', async (req, res) => {
     otpDoc.verified = true;
     await otpDoc.save();
 
-    // Generate a password reset token if this is an email-based reset
-    let resetToken = null;
-    if (method === 'email') {
-      const user = await User.findOne({ email: identifier.toLowerCase().trim() });
-      if (user) {
-        resetToken = await PasswordResetToken.generate(user._id);
+    if (purpose === 'email-verification') {
+      const user = await User.findOne({ email: normalizedIdentifier });
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'No account found with this email' });
       }
+
+      user.emailVerified = true;
+      await user.save();
+
+      const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+      return res.json({
+        success: true,
+        message: 'Email verified successfully',
+        data: {
+          verified: true,
+          token,
+          user: {
+            id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            emailVerified: user.emailVerified,
+          },
+        },
+      });
+    }
+
+    if (purpose === 'password-reset' && method !== 'email') {
+      return res.status(400).json({ success: false, message: 'Password reset is available by email only' });
+    }
+
+    let resetToken = null;
+    const user = await User.findOne({ email: normalizedIdentifier });
+    if (user) {
+      resetToken = await PasswordResetToken.generate(user._id);
     }
 
     res.json({

@@ -28,6 +28,10 @@ const userSchema = new mongoose.Schema(
       enum: ['individual', 'recycler', 'admin'],
       default: 'individual',
     },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
     recyclerProfile: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

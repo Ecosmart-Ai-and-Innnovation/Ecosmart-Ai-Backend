@@ -5,6 +5,8 @@ const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 const PasswordResetToken = require('../models/PasswordResetToken');
+const Otp = require('../models/Otp');
+const { sendEmail } = require('../services/brevo');
 
 const router = express.Router();
 
@@ -38,6 +40,46 @@ function validateEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+async function sendEmailOtp({ email, purpose }) {
+  const normalizedEmail = email.toLowerCase().trim();
+  const otpCode = Otp.generate();
+
+  await Otp.create({
+    identifier: normalizedEmail,
+    method: 'email',
+    otp: otpCode,
+    expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    purpose,
+  });
+
+  try {
+    await sendEmail({
+      to: normalizedEmail,
+      subject: purpose === 'email-verification'
+        ? 'Verify your EcoSmart AI email'
+        : 'Your EcoSmart AI Password Reset OTP',
+      htmlContent: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+          <h1 style="color: #1b5030; font-size: 24px; text-align: center;">EcoSmart AI</h1>
+          <div style="background: #f6fcf4; border-radius: 16px; padding: 32px; text-align: center;">
+            <h2 style="color: #1b5030; margin-bottom: 8px;">${purpose === 'email-verification' ? 'Verify Your Email' : 'Password Reset'}</h2>
+            <p style="color: #6b7280; font-size: 14px; margin-bottom: 24px;">Use the OTP below. It expires in 5 minutes.</p>
+            <div style="background: #ffffff; border-radius: 12px; padding: 16px 32px; display: inline-block;">
+              <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1b5030;">${otpCode}</span>
+            </div>
+          </div>
+        </div>
+      `,
+    });
+  } catch (error) {
+    console.error('Email OTP send failed (OTP still stored for dev use):', error.message);
+  }
+
+  console.log(`\n🔐 ${purpose} OTP for email (${normalizedEmail}): ${otpCode}\n`);
+
+  return otpCode;
+}
+
 // ── Sign Up ──
 router.post('/register', authLimiter, async (req, res) => {
   try {
@@ -64,21 +106,29 @@ router.post('/register', authLimiter, async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    const publicRole = ['individual', 'recycler'].includes(role) ? role : 'individual';
+
     const user = await User.create({
       name: name.trim(),
       email: email.toLowerCase().trim(),
       phone: phone || '',
-      role: role || 'individual',
+      role: publicRole,
       password: hashedPassword,
+      emailVerified: false,
     });
 
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    await sendEmailOtp({ email: user.email, purpose: 'email-verification' });
 
     res.status(201).json({
       success: true,
       data: {
-        token,
-        user: { id: user._id, name: user.name, email: user.email, role: user.role },
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          emailVerified: user.emailVerified,
+        },
       },
     });
   } catch (error) {
@@ -117,13 +167,32 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid email or password' });
     }
 
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your email before signing in',
+        code: 'email_not_verified',
+        data: {
+          email: user.email,
+          role: user.role,
+          emailVerified: false,
+        },
+      });
+    }
+
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
       success: true,
       data: {
         token,
-        user: { id: user._id, name: user.name, email: user.email, role: user.role },
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          emailVerified: user.emailVerified,
+        },
       },
     });
   } catch (error) {
@@ -139,6 +208,8 @@ router.get('/me', auth, async (req, res) => {
       id: req.user._id,
       name: req.user.name,
       email: req.user.email,
+      role: req.user.role,
+      emailVerified: req.user.emailVerified,
       createdAt: req.user.createdAt,
     },
   });
@@ -158,13 +229,12 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'No account found with this email' });
     }
 
-    // Generate a hashed password reset token (valid 15 min)
-    const rawToken = await PasswordResetToken.generate(user._id);
+    await sendEmailOtp({ email: user.email, purpose: 'password-reset' });
 
     res.json({
       success: true,
-      message: 'Reset link sent to your email',
-      data: { resetToken: rawToken },
+      message: 'Reset code sent to your email',
+      data: { email: user.email },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
