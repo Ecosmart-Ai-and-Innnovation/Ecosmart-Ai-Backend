@@ -62,32 +62,11 @@ app.get('/api/dashboard/recycler', require('./middleware/auth'), async (req, res
   try {
     const User = require('./models/User');
     const Recycler = require('./models/Recycler');
-    const Transaction = require('./models/transaction.model');
 
     const user = await User.findById(req.user._id);
 
     const recyclerProfile = await Recycler.findOne({ userId: req.user._id });
     const listingCount = recyclerProfile?.categories?.length || 0;
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const todayPayments = await Transaction.aggregate([
-      { $match: { recyclerId: req.user._id, createdAt: { $gte: today }, type: 'payment' } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]).then((r) => (r[0]?.total || 0));
-
-    const weekAgo = new Date();
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    const weekPurchases = await Transaction.aggregate([
-      { $match: { recyclerId: req.user._id, createdAt: { $gte: weekAgo }, type: 'payment' } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]).then((r) => (r[0]?.total || 0));
-
-    const pendingSettlements = await Transaction.aggregate([
-      { $match: { recyclerId: req.user._id, status: 'pending' } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]).then((r) => (r[0]?.total || 0));
 
     res.json({
       success: true,
@@ -98,10 +77,10 @@ app.get('/api/dashboard/recycler', require('./middleware/auth'), async (req, res
           dateString: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
         },
         wallet: {
-          balance: todayPayments + pendingSettlements,
-          todayPayments,
-          weekPurchases,
-          pendingSettlements,
+          balance: 0,
+          todayPayments: 0,
+          weekPurchases: 0,
+          pendingSettlements: 0,
         },
         stats: {
           activeListings: listingCount,
