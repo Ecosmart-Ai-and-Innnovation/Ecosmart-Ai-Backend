@@ -57,6 +57,74 @@ app.get('/api/dashboard', require('./middleware/auth'), async (req, res) => {
   }
 });
 
+// Recycler Dashboard summary
+app.get('/api/dashboard/recycler', require('./middleware/auth'), async (req, res) => {
+  try {
+    const User = require('./models/User');
+    const Recycler = require('./models/Recycler');
+    const Transaction = require('./models/transaction.model');
+
+    const user = await User.findById(req.user._id);
+
+    const recyclerProfile = await Recycler.findOne({ userId: req.user._id });
+    const listingCount = recyclerProfile?.categories?.length || 0;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const todayPayments = await Transaction.aggregate([
+      { $match: { recyclerId: req.user._id, createdAt: { $gte: today }, type: 'payment' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]).then((r) => (r[0]?.total || 0));
+
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekPurchases = await Transaction.aggregate([
+      { $match: { recyclerId: req.user._id, createdAt: { $gte: weekAgo }, type: 'payment' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]).then((r) => (r[0]?.total || 0));
+
+    const pendingSettlements = await Transaction.aggregate([
+      { $match: { recyclerId: req.user._id, status: 'pending' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } },
+    ]).then((r) => (r[0]?.total || 0));
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          businessName: user?.name || recyclerProfile?.businessName || 'Recycler',
+          isOnline: recyclerProfile?.availableNow || false,
+          dateString: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
+        },
+        wallet: {
+          balance: todayPayments + pendingSettlements,
+          todayPayments,
+          weekPurchases,
+          pendingSettlements,
+        },
+        stats: {
+          activeListings: listingCount,
+          avgRating: Math.round((recyclerProfile?.rating || 4.5) * 10) / 10,
+          totalKgCollected: recyclerProfile?.totalKgCollected || 0,
+          ecoPoints: recyclerProfile?.ecoPoints || 0,
+        },
+        requests: [],
+        activities: [],
+        ecoImpact: {
+          wasteRecycledKg: recyclerProfile?.totalKgCollected || 0,
+          co2ReducedKg: Math.round((recyclerProfile?.totalKgCollected || 0) * 0.6),
+          individualsRewarded: recyclerProfile?.individualsRewarded || 0,
+          communitiesServed: recyclerProfile?.communitiesServed || 1,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Recycler dashboard error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ success: true, message: 'EcoSmart AI API is running' });
