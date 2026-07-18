@@ -17,7 +17,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' })); // //Ese's fix — headroom for base64 image overhead (~37% inflation)
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
