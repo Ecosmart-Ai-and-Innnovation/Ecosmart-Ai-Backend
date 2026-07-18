@@ -5,8 +5,7 @@ const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
 const PasswordResetToken = require('../models/PasswordResetToken');
-const Otp = require('../models/Otp');
-const { sendEmail } = require('../services/brevo');
+const { generateAndSendEmailOtp } = require('../services/otpService'); // Ese's fix 
 
 const router = express.Router();
 
@@ -38,46 +37,6 @@ function validatePassword(password) {
 // Email format validation
 function validateEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-async function sendEmailOtp({ email, purpose }) {
-  const normalizedEmail = email.toLowerCase().trim();
-  const otpCode = Otp.generate();
-
-  await Otp.create({
-    identifier: normalizedEmail,
-    method: 'email',
-    otp: otpCode,
-    expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-    purpose,
-  });
-
-  try {
-    await sendEmail({
-      to: normalizedEmail,
-      subject: purpose === 'email-verification'
-        ? 'Verify your EcoSmart AI email'
-        : 'Your EcoSmart AI Password Reset OTP',
-      htmlContent: `
-        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-          <h1 style="color: #1b5030; font-size: 24px; text-align: center;">EcoSmart AI</h1>
-          <div style="background: #f6fcf4; border-radius: 16px; padding: 32px; text-align: center;">
-            <h2 style="color: #1b5030; margin-bottom: 8px;">${purpose === 'email-verification' ? 'Verify Your Email' : 'Password Reset'}</h2>
-            <p style="color: #6b7280; font-size: 14px; margin-bottom: 24px;">Use the OTP below. It expires in 5 minutes.</p>
-            <div style="background: #ffffff; border-radius: 12px; padding: 16px 32px; display: inline-block;">
-              <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1b5030;">${otpCode}</span>
-            </div>
-          </div>
-        </div>
-      `,
-    });
-  } catch (error) {
-    console.error('Email OTP send failed (OTP still stored for dev use):', error.message);
-  }
-
-  console.log(`\n🔐 ${purpose} OTP for email (${normalizedEmail}): ${otpCode}\n`);
-
-  return otpCode;
 }
 
 // ── Sign Up ──
@@ -117,7 +76,7 @@ router.post('/register', authLimiter, async (req, res) => {
       emailVerified: false,
     });
 
-    await sendEmailOtp({ email: user.email, purpose: 'email-verification' });
+    const otpCode = await generateAndSendEmailOtp({ email: user.email, purpose: 'email-verification' }); // Ese's fix
 
     res.status(201).json({
       success: true,
@@ -129,6 +88,8 @@ router.post('/register', authLimiter, async (req, res) => {
           role: user.role,
           emailVerified: user.emailVerified,
         },
+         //Ese's fix
+        ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode }),
       },
     });
   } catch (error) {
@@ -229,12 +190,15 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'No account found with this email' });
     }
 
-    await sendEmailOtp({ email: user.email, purpose: 'password-reset' });
+    const otpCode = await generateAndSendEmailOtp({ email: user.email, purpose: 'password-reset' }); // //Ese's fix
 
     res.json({
       success: true,
       message: 'Reset code sent to your email',
-      data: { email: user.email },
+      data: {
+        email: user.email,
+        ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode }), // //Ese's fix
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
