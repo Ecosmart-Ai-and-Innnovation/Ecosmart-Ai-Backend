@@ -3,7 +3,8 @@ const router = express.Router();
 const Otp = require('../models/Otp');
 const User = require('../models/User');
 const PasswordResetToken = require('../models/PasswordResetToken');
-const { sendEmail, sendSMS } = require('../services/brevo');
+const { sendSMS } = require('../services/brevo');
+const { generateAndSendEmailOtp } = require('../services/otpService'); //Ese's fix 
 const jwt = require('jsonwebtoken');
 
 // ── Send OTP ──
@@ -51,63 +52,37 @@ router.post('/send', async (req, res) => {
       });
     }
 
-    // Generate 6-digit OTP
-    const otpCode = Otp.generate();
+    let otpCode;
 
-    // Store OTP with 5-minute expiry
-    await Otp.create({
-      identifier: normalizedIdentifier,
-      method,
-      otp: otpCode,
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      purpose,
-    });
+    if (method === 'email') {
+       //Ese's fix
+      otpCode = await generateAndSendEmailOtp({ email: normalizedIdentifier, purpose });
+    } else {
+      otpCode = Otp.generate();
 
-    // Send OTP via Brevo
-    const isConfigured = process.env.BREVO_API_KEY && process.env.BREVO_API_KEY !== 'your_brevo_api_key_here';
+      await Otp.create({
+        identifier: normalizedIdentifier,
+        method,
+        otp: otpCode,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        purpose,
+      });
 
-    if (isConfigured) {
-      try {
-        if (method === 'email') {
-          await sendEmail({
-            to: identifier,
-            subject: purpose === 'email-verification'
-              ? 'Verify your EcoSmart AI email'
-              : 'Your EcoSmart AI Password Reset OTP',
-            htmlContent: `
-              <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-                <div style="text-align: center; margin-bottom: 24px;">
-                  <h1 style="color: #1b5030; font-size: 24px;">EcoSmart AI</h1>
-                </div>
-                <div style="background: #f6fcf4; border-radius: 16px; padding: 32px; text-align: center;">
-                  <h2 style="color: #1b5030; margin-bottom: 8px;">${purpose === 'email-verification' ? 'Verify Your Email' : 'Password Reset'}</h2>
-                  <p style="color: #6b7280; font-size: 14px; margin-bottom: 24px;">
-                    Use the OTP below to continue. It expires in 5 minutes.
-                  </p>
-                  <div style="background: #ffffff; border-radius: 12px; padding: 16px 32px; display: inline-block;">
-                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #1b5030;">${otpCode}</span>
-                  </div>
-                </div>
-                <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 24px;">
-                  If you didn't request this, you can safely ignore this email.
-                </p>
-              </div>
-            `,
-          });
-        } else {
+      const isConfigured = process.env.BREVO_API_KEY && process.env.BREVO_API_KEY !== 'your_brevo_api_key_here';
+
+      if (isConfigured) {
+        try {
           await sendSMS({
             to: identifier,
-          content: `Your EcoSmart AI OTP is: ${otpCode}. It expires in 5 minutes.`,
+            content: `Your EcoSmart AI OTP is: ${otpCode}. It expires in 5 minutes.`,
           });
+        } catch (brevoError) {
+          console.error('Brevo SMS send failed (OTP still stored for dev use):', brevoError);
         }
-      } catch (brevoError) {
-        // Log Brevo error but don't fail the request — OTP is still stored
-        console.error('Brevo send failed (OTP still stored for dev use):', brevoError.message);
       }
-    }
 
-    // Always log to console for development
-    console.log(`\n🔐 ${purpose} OTP for ${method} (${identifier}): ${otpCode}\n`);
+      console.log(`\n ${purpose} OTP for ${method} (${identifier}): ${otpCode}\n`);
+    }
 
     // Mask identifier for response
     const masked = maskIdentifier(identifier, method);
@@ -117,7 +92,6 @@ router.post('/send', async (req, res) => {
       message: `OTP sent to your ${method}`,
       data: {
         masked,
-        // In development, always return the OTP since email/SMS may not actually send
         ...(process.env.NODE_ENV !== 'production' && { devOtp: otpCode }),
       },
     });
