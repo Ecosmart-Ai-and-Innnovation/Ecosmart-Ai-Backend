@@ -123,7 +123,7 @@ async function classifyWaste(imageBase64, text) {
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-flash-latest', // //Ese's fix — gemini-1.5-flash was retired, returned 404
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: 1024,
